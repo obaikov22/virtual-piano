@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+><!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -125,13 +125,13 @@ html, body {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  transform: scaleX(-1); /* mirror for selfie view */
 }
 
 #canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  transform: scaleX(-1);
+  /* NO transform here — we mirror coords manually in JS */
 }
 
 /* HUD overlay */
@@ -609,21 +609,15 @@ function showNoteLabel(name) {
 const HAND_COLORS = ['#7ae8b8', '#e8c97a'];
 const drawUtil = { canvas, ctx: ctx2d };
 
-// Piano Y offset in screen space (piano is separate element at bottom)
-// We extend hit zone upward by pianoCanvas.height worth of pixels in cam space
-function getPianoHitExtend() {
-  // Map piano canvas height to approximate camera pixels
-  return pianoCanvas.height * 1.2;
-}
-
 // Convert normalised landmark to piano canvas coords
-function toPianoCoords(lx, ly) {
-  // Camera is flipped (scaleX(-1)) so x is mirrored
+// lx: 0=left edge, 1=right edge of camera frame
+// We mirror X because video is CSS-mirrored for selfie view
+function toPianoCoords(lx) {
+  // Mirror X to match visual display
   const px = (1 - lx) * pianoCanvas.width;
-  // y: landmark is in full video height, piano is at the bottom
-  // We need to map video coords into piano space
-  const py = ly * pianoCanvas.height * 2.5 - pianoCanvas.height * 1.0;
-  return { px, py };
+  // Y is always 0 — we just need horizontal position for key selection
+  // The hit-extend in findKey handles vertical range
+  return { px, py: 0 };
 }
 
 async function detect() {
@@ -709,8 +703,9 @@ async function detect() {
             fingerState[fid] = true;
 
             // Find which piano key the finger tip is over
-            const { px, py } = toPianoCoords(lm[tipIdx].x, lm[tipIdx].y);
-            const keyId = findKey(px, py, pianoCanvas.height * 0.8);
+            // X maps directly across full piano width
+            const { px } = toPianoCoords(lm[tipIdx].x);
+            const keyId = findKey(px, 0, pianoCanvas.height * 2);
 
             if (keyId && canPlay(keyId)) {
               const key = keys.find(k => k.id === keyId);
@@ -802,5 +797,7 @@ window.addEventListener('resize', () => {
   resizePianoCanvas();
 });
 </script>
+</body>
+</html>
 </body>
 </html>
