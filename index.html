@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Virtual Piano</title>
+<link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #080a0f;
+  --surface: #0d1117;
+  --border: #1c2333;
+  --accent: #e8c97a;
+  --accent2: #7ab8e8;
+  --accent3: #7ae8b8;
+  --red: #e87a7a;
+  --text: #c8d4e8;
+  --dim: #3a4a60;
+  --white-key: #e8e4d8;
+  --white-key-pressed: #e8c97a;
+  --black-key: #141820;
+  --black-key-pressed: #7ab8e8;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* ── INTRO ── */
+#intro {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 0; z-index: 100;
+  background: var(--bg);
+}
+
+.intro-eyebrow {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px; letter-spacing: 5px;
+  color: var(--dim); text-transform: uppercase;
+  margin-bottom: 20px;
+  animation: fadeUp 0.5s 0.1s both;
+}
+
+.intro-title {
+  font-family: 'Syncopate', sans-serif;
+  font-size: clamp(32px, 10vw, 64px);
+  font-weight: 700;
+  letter-spacing: -1px;
+  color: var(--accent);
+  text-shadow: 0 0 60px rgba(232,201,122,0.25);
+  margin-bottom: 8px;
+  animation: fadeUp 0.5s 0.2s both;
+}
+
+.intro-sub {
+  font-size: 12px; letter-spacing: 2px;
+  color: var(--dim); text-transform: uppercase;
+  margin-bottom: 48px;
+  animation: fadeUp 0.5s 0.3s both;
+}
+
+.intro-tips {
+  font-size: 12px; color: var(--dim);
+  line-height: 2.2; text-align: center;
+  margin-bottom: 48px;
+  animation: fadeUp 0.5s 0.4s both;
+}
+
+.intro-tips span { color: var(--accent); }
+
+.btn-start {
+  padding: 16px 48px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: 'Syncopate', sans-serif;
+  font-size: 11px; letter-spacing: 4px;
+  text-transform: uppercase;
+  cursor: pointer;
+  position: relative; overflow: hidden;
+  transition: color 0.3s;
+  animation: fadeUp 0.5s 0.5s both;
+  -webkit-appearance: none;
+}
+
+.btn-start::before {
+  content: ''; position: absolute; inset: 0;
+  background: var(--accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform 0.3s ease; z-index: -1;
+}
+
+.btn-start:active::before { transform: scaleX(1); }
+.btn-start:active { color: var(--bg); }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── MAIN APP ── */
+#app {
+  position: fixed; inset: 0;
+  display: none; flex-direction: column;
+}
+
+/* Camera feed */
+#cam-wrap {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: #000;
+}
+
+#video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  transform: scaleX(-1);
+}
+
+/* HUD overlay */
+#hud {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(8,10,15,0.85) 0%, transparent 100%);
+  z-index: 10;
+}
+
+.hud-label {
+  font-family: 'Syncopate', sans-serif;
+  font-size: 10px; letter-spacing: 3px;
+  color: var(--accent);
+}
+
+.hud-status {
+  font-size: 10px; letter-spacing: 1px;
+  color: var(--dim);
+  display: flex; align-items: center; gap: 8px;
+}
+
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim);
+  transition: all 0.3s;
+}
+.status-dot.on  { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); }
+.status-dot.err { background: var(--red);     box-shadow: 0 0 8px var(--red); }
+
+/* Note flash */
+#note-display {
+  position: absolute;
+  bottom: 10px; left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Syncopate', sans-serif;
+  font-size: 22px; letter-spacing: 4px;
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--accent);
+  opacity: 0;
+  transition: opacity 0.1s;
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+}
+
+/* ── PIANO ── */
+#piano-wrap {
+  position: relative;
+  height: 140px;
+  background: #07090d;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+#piano-canvas {
+  width: 100%; height: 100%;
+  touch-action: none;
+}
+
+/* Octave controls */
+#octave-bar {
+  position: absolute; bottom: 8px; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; pointer-events: none; z-index: 5;
+}
+
+.oct-btn {
+  width: 32px; height: 32px;
+  background: rgba(8,10,15,0.8);
+  border: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 16px; font-family: 'DM Mono', monospace;
+  cursor: pointer; pointer-events: all;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+  -webkit-appearance: none;
+  border-radius: 2px;
+}
+
+.oct-btn:active { border-color: var(--accent); color: var(--accent); background: rgba(232,201,122,0.1); }
+
+#oct-label {
+  font-size: 10px; letter-spacing: 2px;
+  color: var(--dim); pointer-events: none;
+  font-family: 'DM Mono', monospace;
+}
+
+/* Loading overlay */
+#loading {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 16px; z-index: 200;
+}
+
+.loading-bar-wrap {
+  width: 200px; height: 2px;
+  background: var(--border);
+}
+
+.loading-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent3));
+  width: 0%; transition: width 0.3s;
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.loading-text {
+  font-size: 11px; letter-spacing: 2px; color: var(--dim);
+}
+</style>
+</head>
+<body>
+
+<!-- INTRO -->
+<div id="intro">
+  <div class="intro-eyebrow">MediaPipe · Web Audio</div>
+  <div class="intro-title">PIANO</div>
+  <div class="intro-sub">Virtual Hand Instrument</div>
+  <div class="intro-tips">
+    <span>►</span> Положи телефон горизонтально<br>
+    <span>►</span> Держи руки над пианино<br>
+    <span>►</span> Опускай пальцы вниз для нажатия
+  </div>
+  <button class="btn-start" id="btn-start">Начать</button>
+</div>
+
+<!-- LOADING -->
+<div id="loading" style="display:none">
+  <div class="loading-text" id="loading-text">ЗАГРУЗКА МОДЕЛИ...</div>
+  <div class="loading-bar-wrap"><div class="loading-bar" id="loading-bar"></div></div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div id="cam-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="hud">
+      <div class="hud-label">PIANO</div>
+      <div class="hud-status">
+        <div class="status-dot" id="hand-dot"></div>
+        <span id="hand-status">ЖДУ РУКИ</span>
+      </div>
+    </div>
+    <div id="note-display"></div>
+  </div>
+  <div id="piano-wrap">
+    <canvas id="piano-canvas"></canvas>
+    <div id="octave-bar">
+      <button class="oct-btn" id="oct-down">−</button>
+      <span id="oct-label">C4 – C5</span>
+      <button class="oct-btn" id="oct-up">+</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// ═══════════════════════════════════════════════════
+//  IMPORTS — MediaPipe Tasks Vision (CDN)
+// ═══════════════════════════════════════════════════
+import {
+  HandLandmarker,
+  FilesetResolver,
+  DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+// ═══════════════════════════════════════════════════
+//  WEB AUDIO — Piano Synthesis
+// ═══════════════════════════════════════════════════
+let audioCtx = null;
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playNote(freq, velocity = 0.7) {
+  const ctx = getAudioCtx();
+  const now = ctx.currentTime;
+  const dur = 1.4;
+
+  const osc1 = ctx.createOscillator();
+  const osc2 = ctx.createOscillator();
+  const osc3 = ctx.createOscillator();
+  const osc4 = ctx.createOscillator();
+
+  osc1.frequency.value = freq;
+  osc2.frequency.value = freq * 2;
+  osc3.frequency.value = freq * 3;
+  osc4.frequency.value = freq * 4.1; // slight detune for warmth
+
+  const g1 = ctx.createGain(); g1.gain.value = 0.55 * velocity;
+  const g2 = ctx.createGain(); g2.gain.value = 0.20 * velocity;
+  const g3 = ctx.createGain(); g3.gain.value = 0.10 * velocity;
+  const g4 = ctx.createGain(); g4.gain.value = 0.05 * velocity;
+
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0, now);
+  master.gain.linearRampToValueAtTime(0.9, now + 0.008); // fast attack
+  master.gain.exponentialRampToValueAtTime(0.3, now + 0.2);
+  master.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -12;
+  compressor.ratio.value = 4;
+
+  [osc1,osc2,osc3,osc4].forEach((o,i) => {
+    o.type = 'sine';
+    o.connect([g1,g2,g3,g4][i]);
+    [g1,g2,g3,g4][i].connect(master);
+  });
+
+  master.connect(compressor);
+  compressor.connect(ctx.destination);
+
+  [osc1,osc2,osc3,osc4].forEach(o => { o.start(now); o.stop(now + dur); });
+}
+
+function noteFreq(name, octave) {
+  const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const semi = NOTES.indexOf(name);
+  const midi = (octave + 1) * 12 + semi;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// ═══════════════════════════════════════════════════
+//  KEYBOARD LAYOUT
+// ═══════════════════════════════════════════════════
+const ALL_NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const WHITE_NOTES = ['C','D','E','F','G','A','B'];
+const BLACK_NOTES = ['C#','D#','F#','G#','A#'];
+const BLACK_AFTER_WHITE = { 'C':'C#', 'D':'D#', 'F':'F#', 'G':'G#', 'A':'A#' };
+
+let startOctave = 4;
+let numOctaves  = 2;
+let keys = [];
+let keyRects = {}; // keyId -> {x,y,w,h,isBlack}
+let activeKeys = {}; // keyId -> timestamp
+
+function buildKeys() {
+  keys = [];
+  for (let o = 0; o < numOctaves; o++) {
+    const oct = startOctave + o;
+    for (const name of ALL_NOTES) {
+      keys.push({ id: `${name}${oct}`, name, octave: oct, freq: noteFreq(name, oct) });
+    }
+  }
+}
+
+function layoutPiano(canvasW, canvasH) {
+  keyRects = {};
+  const whiteKeys = keys.filter(k => !k.name.includes('#'));
+  const blackKeys  = keys.filter(k => k.name.includes('#'));
+  const ww = canvasW / whiteKeys.length;
+  const wh = canvasH;
+  const bw = ww * 0.62;
+  const bh = wh * 0.62;
+
+  whiteKeys.forEach((k, i) => {
+    keyRects[k.id] = { x: i * ww, y: 0, w: ww - 1, h: wh, isBlack: false };
+  });
+
+  // Black keys: positioned between white keys
+  let wIdx = 0;
+  for (let o = 0; o < numOctaves; o++) {
+    const oct = startOctave + o;
+    const octWhiteStart = o * 7;
+    WHITE_NOTES.forEach((wn, wi) => {
+      if (BLACK_AFTER_WHITE[wn]) {
+        const kid = `${BLACK_AFTER_WHITE[wn]}${oct}`;
+        const x = (octWhiteStart + wi) * ww + ww - bw / 2;
+        keyRects[kid] = { x, y: 0, w: bw, h: bh, isBlack: true };
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  PIANO CANVAS DRAWING
+// ═══════════════════════════════════════════════════
+const pianoCanvas = document.getElementById('piano-canvas');
+const pianoCtx = pianoCanvas.getContext('2d');
+
+function resizePianoCanvas() {
+  const wrap = document.getElementById('piano-wrap');
+  pianoCanvas.width  = wrap.clientWidth;
+  pianoCanvas.height = wrap.clientHeight - 44; // leave room for octave bar
+  layoutPiano(pianoCanvas.width, pianoCanvas.height);
+}
+
+function drawPiano() {
+  const cw = pianoCanvas.width, ch = pianoCanvas.height;
+  pianoCtx.clearRect(0, 0, cw, ch);
+
+  const now = Date.now();
+  const HOLD_MS = 220;
+
+  // White keys first
+  for (const [kid, r] of Object.entries(keyRects)) {
+    if (r.isBlack) continue;
+    const active = activeKeys[kid] && (now - activeKeys[kid]) < HOLD_MS;
+
+    // Key body
+    pianoCtx.fillStyle = active ? '#e8c97a' : '#e2ddd0';
+    pianoCtx.fillRect(r.x, r.y, r.w, r.h);
+
+    // Border
+    pianoCtx.strokeStyle = active ? '#b8996a' : '#b0aba0';
+    pianoCtx.lineWidth = 0.5;
+    pianoCtx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+    // Note name at bottom
+    const noteName = kid.replace(/\d+/, '');
+    pianoCtx.fillStyle = active ? '#6a4a10' : '#888';
+    pianoCtx.font = `${Math.max(9, r.w * 0.28)}px 'DM Mono', monospace`;
+    pianoCtx.textAlign = 'center';
+    pianoCtx.fillText(noteName, r.x + r.w / 2, r.y + r.h - 6);
+
+    // Glow on press
+    if (active) {
+      pianoCtx.shadowColor = '#e8c97a';
+      pianoCtx.shadowBlur = 12;
+      pianoCtx.fillStyle = 'rgba(232,201,122,0.3)';
+      pianoCtx.fillRect(r.x, r.y, r.w, r.h);
+      pianoCtx.shadowBlur = 0;
+    }
+  }
+
+  // Black keys on top
+  for (const [kid, r] of Object.entries(keyRects)) {
+    if (!r.isBlack) continue;
+    const active = activeKeys[kid] && (now - activeKeys[kid]) < HOLD_MS;
+
+    // Gradient body
+    const grad = pianoCtx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
+    if (active) {
+      grad.addColorStop(0, '#7ab8e8');
+      grad.addColorStop(1, '#3a78a8');
+    } else {
+      grad.addColorStop(0, '#1e2530');
+      grad.addColorStop(1, '#0a0d12');
+    }
+    pianoCtx.fillStyle = grad;
+    pianoCtx.fillRect(r.x, r.y, r.w, r.h);
+
+    // Subtle border
+    pianoCtx.strokeStyle = active ? '#5a98c8' : '#2a3545';
+    pianoCtx.lineWidth = 1;
+    pianoCtx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+    if (active) {
+      pianoCtx.shadowColor = '#7ab8e8';
+      pianoCtx.shadowBlur = 16;
+      pianoCtx.fillStyle = 'rgba(122,184,232,0.25)';
+      pianoCtx.fillRect(r.x, r.y, r.w, r.h);
+      pianoCtx.shadowBlur = 0;
+    }
+  }
+
+  requestAnimationFrame(drawPiano);
+}
+
+// ═══════════════════════════════════════════════════
+//  HIT TEST — which key is under a point
+// ═══════════════════════════════════════════════════
+function findKey(px, py, extendUp = 0) {
+  // Check black keys first (priority)
+  for (const [kid, r] of Object.entries(keyRects)) {
+    if (!r.isBlack) continue;
+    if (px >= r.x && px <= r.x + r.w && py >= r.y - extendUp && py <= r.y + r.h)
+      return kid;
+  }
+  for (const [kid, r] of Object.entries(keyRects)) {
+    if (r.isBlack) continue;
+    if (px >= r.x && px <= r.x + r.w && py >= r.y - extendUp && py <= r.y + r.h)
+      return kid;
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════
+//  PRESS DETECTION
+// ═══════════════════════════════════════════════════
+// Finger tip indices
+const TIPS = [8, 12, 16, 20]; // index, middle, ring, pinky (no thumb)
+const MCPS = [5,  9, 13, 17]; // corresponding MCPs
+
+const PRESS_THRESH  = 0.028;
+const RELEASE_MARGIN = 0.012;
+const NOTE_COOLDOWN  = 180; // ms
+
+const fingerState   = {}; // fingerId -> bool (pressed)
+const lastPlay      = {}; // keyId -> timestamp
+
+function canPlay(keyId) {
+  const now = Date.now();
+  if (!lastPlay[keyId] || now - lastPlay[keyId] > NOTE_COOLDOWN) {
+    lastPlay[keyId] = now;
+    return true;
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════════════
+//  MEDIAPIPE SETUP
+// ═══════════════════════════════════════════════════
+let handLandmarker = null;
+let lastVideoTime = -1;
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx2d  = canvas.getContext('2d');
+
+function setLoading(text, pct) {
+  document.getElementById('loading-text').textContent = text;
+  document.getElementById('loading-bar').style.width = pct + '%';
+}
+
+async function initMediaPipe() {
+  setLoading('ЗАГРУЗКА MEDIAPIPE...', 10);
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+  setLoading('ЗАГРУЗКА МОДЕЛИ РУК...', 40);
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 2,
+    minHandDetectionConfidence: 0.6,
+    minHandPresenceConfidence: 0.6,
+    minTrackingConfidence: 0.5,
+  });
+  setLoading('ГОТОВО', 100);
+  setTimeout(() => {
+    document.getElementById('loading').style.display = 'none';
+  }, 300);
+}
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await new Promise(r => video.onloadedmetadata = r);
+  video.play();
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+}
+
+// ═══════════════════════════════════════════════════
+//  NOTE DISPLAY
+// ═══════════════════════════════════════════════════
+let noteDisplayTimer = null;
+const noteDisplay = document.getElementById('note-display');
+
+function showNoteLabel(name) {
+  noteDisplay.textContent = name;
+  noteDisplay.style.opacity = '1';
+  clearTimeout(noteDisplayTimer);
+  noteDisplayTimer = setTimeout(() => noteDisplay.style.opacity = '0', 600);
+}
+
+// ═══════════════════════════════════════════════════
+//  MAIN DETECTION LOOP
+// ═══════════════════════════════════════════════════
+const HAND_COLORS = ['#7ae8b8', '#e8c97a'];
+const drawUtil = { canvas, ctx: ctx2d };
+
+// Piano Y offset in screen space (piano is separate element at bottom)
+// We extend hit zone upward by pianoCanvas.height worth of pixels in cam space
+function getPianoHitExtend() {
+  // Map piano canvas height to approximate camera pixels
+  return pianoCanvas.height * 1.2;
+}
+
+// Convert normalised landmark to piano canvas coords
+function toPianoCoords(lx, ly) {
+  // Camera is flipped (scaleX(-1)) so x is mirrored
+  const px = (1 - lx) * pianoCanvas.width;
+  // y: landmark is in full video height, piano is at the bottom
+  // We need to map video coords into piano space
+  const py = ly * pianoCanvas.height * 2.5 - pianoCanvas.height * 1.0;
+  return { px, py };
+}
+
+async function detect() {
+  if (!handLandmarker || video.readyState < 2) {
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  const now = video.currentTime;
+  if (now === lastVideoTime) { requestAnimationFrame(detect); return; }
+  lastVideoTime = now;
+
+  // Run detection
+  const result = handLandmarker.detectForVideo(video, performance.now());
+
+  // Clear canvas overlay
+  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+
+  const handDot   = document.getElementById('hand-dot');
+  const handStatus = document.getElementById('hand-status');
+  const handsFound = result.landmarks && result.landmarks.length > 0;
+
+  handDot.className    = 'status-dot ' + (handsFound ? 'on' : '');
+  handStatus.textContent = handsFound ? `РУКИ: ${result.landmarks.length}` : 'ЖДУ РУКИ';
+
+  if (handsFound) {
+    for (let hi = 0; hi < result.landmarks.length; hi++) {
+      const lm    = result.landmarks[hi];
+      const color = HAND_COLORS[hi % 2];
+
+      // Draw skeleton on video overlay
+      ctx2d.strokeStyle = color;
+      ctx2d.lineWidth   = 2;
+      ctx2d.globalAlpha = 0.7;
+
+      const CONNECTIONS = [
+        [0,1],[1,2],[2,3],[3,4],
+        [0,5],[5,6],[6,7],[7,8],
+        [0,9],[9,10],[10,11],[11,12],
+        [0,13],[13,14],[14,15],[15,16],
+        [0,17],[17,18],[18,19],[19,20],
+        [5,9],[9,13],[13,17]
+      ];
+
+      CONNECTIONS.forEach(([a, b]) => {
+        const ax = (1 - lm[a].x) * canvas.width;
+        const ay = lm[a].y * canvas.height;
+        const bx = (1 - lm[b].x) * canvas.width;
+        const by = lm[b].y * canvas.height;
+        ctx2d.beginPath();
+        ctx2d.moveTo(ax, ay);
+        ctx2d.lineTo(bx, by);
+        ctx2d.stroke();
+      });
+
+      // Draw joints
+      for (let i = 0; i < 21; i++) {
+        const jx = (1 - lm[i].x) * canvas.width;
+        const jy = lm[i].y * canvas.height;
+        ctx2d.beginPath();
+        ctx2d.arc(jx, jy, i === 0 ? 5 : 3, 0, Math.PI * 2);
+        ctx2d.fillStyle = color;
+        ctx2d.globalAlpha = 0.85;
+        ctx2d.fill();
+      }
+
+      ctx2d.globalAlpha = 1;
+
+      // Press detection for each finger (skip thumb)
+      for (let fi = 0; fi < TIPS.length; fi++) {
+        const tipIdx = TIPS[fi];
+        const mcpIdx = MCPS[fi];
+        const fid    = `h${hi}_f${fi}`;
+
+        const tipY = lm[tipIdx].y;
+        const mcpY = lm[mcpIdx].y;
+        const delta = tipY - mcpY; // positive = tip below MCP = pressing
+
+        const wasPressed = fingerState[fid];
+
+        if (delta > PRESS_THRESH) {
+          if (!wasPressed) {
+            fingerState[fid] = true;
+
+            // Find which piano key the finger tip is over
+            const { px, py } = toPianoCoords(lm[tipIdx].x, lm[tipIdx].y);
+            const keyId = findKey(px, py, pianoCanvas.height * 0.8);
+
+            if (keyId && canPlay(keyId)) {
+              const key = keys.find(k => k.id === keyId);
+              if (key) {
+                playNote(key.freq, 0.6 + delta * 5);
+                activeKeys[keyId] = Date.now();
+                showNoteLabel(key.name + key.octave);
+              }
+            }
+          }
+        } else if (delta < PRESS_THRESH - RELEASE_MARGIN) {
+          fingerState[fid] = false;
+        }
+
+        // Draw fingertip indicator
+        const tx = (1 - lm[tipIdx].x) * canvas.width;
+        const ty = lm[tipIdx].y * canvas.height;
+        const pressing = fingerState[fid];
+
+        ctx2d.beginPath();
+        ctx2d.arc(tx, ty, pressing ? 12 : 8, 0, Math.PI * 2);
+        ctx2d.fillStyle = pressing ? '#e8c97a' : color;
+        ctx2d.globalAlpha = pressing ? 0.9 : 0.5;
+        ctx2d.fill();
+
+        if (pressing) {
+          ctx2d.beginPath();
+          ctx2d.arc(tx, ty, 18, 0, Math.PI * 2);
+          ctx2d.strokeStyle = '#e8c97a';
+          ctx2d.lineWidth = 2;
+          ctx2d.globalAlpha = 0.5;
+          ctx2d.stroke();
+        }
+
+        ctx2d.globalAlpha = 1;
+      }
+    }
+  }
+
+  requestAnimationFrame(detect);
+}
+
+// ═══════════════════════════════════════════════════
+//  OCTAVE CONTROLS
+// ═══════════════════════════════════════════════════
+function updateOctaveLabel() {
+  document.getElementById('oct-label').textContent =
+    `C${startOctave} – C${startOctave + numOctaves - 1}`;
+}
+
+document.getElementById('oct-up').addEventListener('click', () => {
+  if (startOctave < 6) { startOctave++; buildKeys(); resizePianoCanvas(); updateOctaveLabel(); }
+});
+
+document.getElementById('oct-down').addEventListener('click', () => {
+  if (startOctave > 2) { startOctave--; buildKeys(); resizePianoCanvas(); updateOctaveLabel(); }
+});
+
+// ═══════════════════════════════════════════════════
+//  START BUTTON
+// ═══════════════════════════════════════════════════
+document.getElementById('btn-start').addEventListener('click', async () => {
+  // Unlock audio context on user gesture
+  getAudioCtx();
+
+  document.getElementById('intro').style.display   = 'none';
+  document.getElementById('loading').style.display = 'flex';
+
+  try {
+    await Promise.all([initMediaPipe(), startCamera()]);
+    buildKeys();
+    resizePianoCanvas();
+    updateOctaveLabel();
+    drawPiano();
+    document.getElementById('app').style.display = 'flex';
+    detect();
+  } catch(e) {
+    document.getElementById('loading-text').textContent = '❌ ОШИБКА: ' + e.message;
+    console.error(e);
+  }
+});
+
+// Handle resize
+window.addEventListener('resize', () => {
+  if (canvas.width) {
+    canvas.width  = video.videoWidth  || canvas.width;
+    canvas.height = video.videoHeight || canvas.height;
+  }
+  resizePianoCanvas();
+});
+</script>
+</body>
+</html>
