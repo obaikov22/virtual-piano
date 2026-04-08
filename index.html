@@ -1,4 +1,4 @@
-><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -522,11 +522,14 @@ function findKey(px, py, extendUp = 0) {
 //  PRESS DETECTION
 // ═══════════════════════════════════════════════════
 // Finger tip indices
-const TIPS = [8, 12, 16, 20]; // index, middle, ring, pinky (no thumb)
-const MCPS = [5,  9, 13, 17]; // corresponding MCPs
+const TIPS   = [8, 12, 16, 20]; // index, middle, ring, pinky (no thumb)
+const MCPS   = [5,  9, 13, 17]; // knuckles — для baseline ладони
+const WRIST  = 0;               // запястье — главная базовая точка
 
-const PRESS_THRESH  = 0.028;
-const RELEASE_MARGIN = 0.012;
+// Нажатие: кончик пальца НИЖЕ запястья (tip.y > wrist.y + thresh)
+// Рука держится горизонтально перед камерой, пальцы вниз
+const PRESS_THRESH   = 0.04;   // насколько tip ниже wrist
+const RELEASE_MARGIN = 0.015;
 const NOTE_COOLDOWN  = 180; // ms
 
 const fingerState   = {}; // fingerId -> bool (pressed)
@@ -686,15 +689,31 @@ async function detect() {
 
       ctx2d.globalAlpha = 1;
 
+      // Рисуем базовую линию ладони — горизонтальная линия уровня нажатия
+      const wristPx  = { x: (1 - lm[WRIST].x) * canvas.width, y: lm[WRIST].y * canvas.height };
+      const palmCy   = (lm[WRIST].y + (lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 4) / 2;
+      const baseLineY = palmCy * canvas.height;
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, baseLineY);
+      ctx2d.lineTo(canvas.width, baseLineY);
+      ctx2d.strokeStyle = 'rgba(232,201,122,0.35)';
+      ctx2d.lineWidth = 1;
+      ctx2d.setLineDash([6, 4]);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+
       // Press detection for each finger (skip thumb)
-      for (let fi = 0; fi < TIPS.length; fi++) {
+      // Центр ладони = среднее запястья и костяшек
+        const wristY = lm[WRIST].y;
+        const palmY  = (lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 4;
+        const baseY  = (wristY + palmY) / 2;
+
+        for (let fi = 0; fi < TIPS.length; fi++) {
         const tipIdx = TIPS[fi];
-        const mcpIdx = MCPS[fi];
         const fid    = `h${hi}_f${fi}`;
 
-        const tipY = lm[tipIdx].y;
-        const mcpY = lm[mcpIdx].y;
-        const delta = tipY - mcpY; // positive = tip below MCP = pressing
+        const tipY  = lm[tipIdx].y;
+        const delta = tipY - baseY; // +ve = tip below palm center = press
 
         const wasPressed = fingerState[fid];
 
@@ -797,7 +816,5 @@ window.addEventListener('resize', () => {
   resizePianoCanvas();
 });
 </script>
-</body>
-</html>
 </body>
 </html>
