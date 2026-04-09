@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Virtual Piano — ML</title>
+<link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<style>
+:root{
+  --bg:#080a0f; --s:#0d1117; --b:#1c2333;
+  --gold:#e8c97a; --blue:#7ab8e8; --green:#7ae8b8;
+  --red:#e87a7a; --purple:#b87ae8; --text:#c8d4e8; --dim:#3a4a60;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{width:100%;height:100%;background:var(--bg);color:var(--text);
+  font-family:'DM Mono',monospace;overflow:hidden;touch-action:none;}
+
+/* ── CAMERA ALWAYS VISIBLE ── */
+#cam-layer{position:fixed;inset:0;z-index:0;background:#000;}
+#video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:0.5;}
+#cam-canvas{position:absolute;inset:0;width:100%;height:100%;}
+
+/* ── SCREENS (transparent bg, float above camera) ── */
+.screen{position:fixed;inset:0;display:none;flex-direction:column;
+  align-items:center;justify-content:center;padding:16px;z-index:10;}
+.screen.active{display:flex;}
+.screen.opaque{background:var(--bg);} /* only intro/result are fully opaque */
+
+/* Card with glass effect */
+.card{width:100%;max-width:380px;border:1px solid var(--b);
+  background:rgba(8,10,15,0.88);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  padding:22px;position:relative;overflow:hidden;}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,var(--gold),var(--green));}
+
+.tag{font-size:10px;letter-spacing:4px;color:var(--dim);margin-bottom:8px;text-align:center;}
+.title{font-family:'Syncopate',sans-serif;font-weight:700;
+  font-size:clamp(20px,6vw,36px);color:var(--gold);
+  text-shadow:0 0 30px rgba(232,201,122,.2);margin-bottom:6px;
+  text-align:center;line-height:1.1;}
+.sub{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:20px;text-align:center;}
+
+.btn{padding:13px 0;background:transparent;border:1px solid var(--gold);
+  color:var(--gold);font-family:'Syncopate',sans-serif;font-size:10px;
+  letter-spacing:3px;cursor:pointer;-webkit-appearance:none;
+  display:block;width:100%;margin-top:10px;transition:all .2s;}
+.btn:active{background:var(--gold);color:var(--bg);}
+.btn.dim{border-color:var(--b);color:var(--dim);}
+.btn.dim:active{background:var(--b);}
+
+/* ── CALIB ── */
+.cstep-title{font-family:'Syncopate',sans-serif;font-size:12px;
+  letter-spacing:2px;color:var(--gold);margin-bottom:6px;}
+.cstep-desc{font-size:11px;color:var(--dim);line-height:1.8;margin-bottom:14px;}
+
+/* Big countdown */
+#countdown-ring{width:90px;height:90px;margin:0 auto 14px;position:relative;}
+#countdown-ring canvas{width:100%;height:100%;}
+#countdown-num{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-family:'Syncopate',sans-serif;font-size:28px;color:var(--gold);}
+
+.sdots{display:flex;gap:6px;justify-content:center;margin-bottom:14px;}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--b);transition:all .3s;}
+.sdot.done{background:var(--green);box-shadow:0 0 5px var(--green);}
+.sdot.active{background:var(--gold);box-shadow:0 0 8px var(--gold);animation:dp .8s infinite;}
+@keyframes dp{0%,100%{transform:scale(1)}50%{transform:scale(1.4)}}
+
+/* Finger bars */
+.fings{display:flex;gap:8px;justify-content:center;margin-bottom:12px;}
+.fi{display:flex;flex-direction:column;align-items:center;gap:3px;}
+.fbw{width:30px;height:50px;background:rgba(255,255,255,.03);
+  border:1px solid var(--b);display:flex;align-items:flex-end;overflow:hidden;}
+.fb{width:100%;background:var(--dim);transition:height .08s;}
+.fi.active .fb{background:var(--gold);}
+.fi.done .fb{background:var(--green);}
+.fl{font-size:8px;letter-spacing:1px;color:var(--dim);}
+.fi.active .fl{color:var(--gold);}
+
+/* Status line */
+.cstatus{font-size:11px;letter-spacing:2px;text-align:center;
+  color:var(--green);min-height:18px;margin-bottom:10px;}
+
+/* ── TRAINING ── */
+.loss-wrap{width:100%;height:70px;border:1px solid var(--b);
+  background:rgba(0,0,0,.3);margin-bottom:12px;position:relative;overflow:hidden;}
+.loss-wrap canvas{width:100%;height:100%;}
+.loss-lbl{position:absolute;top:5px;left:7px;font-size:9px;letter-spacing:2px;color:var(--dim);}
+.tstats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
+.ts{border:1px solid var(--b);background:rgba(0,0,0,.2);padding:9px 11px;}
+.tsl{font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:2px;}
+.tsv{font-family:'Syncopate',sans-serif;font-size:16px;color:var(--gold);}
+.tsv.g{color:var(--green);}.tsv.b{color:var(--blue);}
+.ebar-w{width:100%;height:3px;background:var(--b);margin-bottom:5px;}
+.ebar{height:100%;background:var(--purple);box-shadow:0 0 5px var(--purple);transition:width .1s;}
+.elbl{font-size:9px;letter-spacing:2px;color:var(--dim);text-align:center;}
+
+/* ── RESULT ── */
+.ring-w{width:100px;height:100px;margin:0 auto 14px;position:relative;}
+.ring-w canvas{width:100%;height:100%;}
+.ring-n{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-family:'Syncopate',sans-serif;font-size:22px;color:var(--green);}
+.rp{width:100%;border-collapse:collapse;margin-bottom:18px;}
+.rp td{padding:6px 0;border-bottom:1px solid rgba(28,35,51,.6);font-size:11px;}
+.rp td:first-child{color:var(--dim);}
+.rp td:last-child{text-align:right;color:var(--gold);}
+
+/* ── APP (piano mode) ── */
+#app{position:fixed;inset:0;display:none;flex-direction:column;z-index:10;}
+#play-cam{position:relative;flex:1;overflow:hidden;}
+#play-video{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;transform:scaleX(-1);}
+#play-canvas{position:absolute;inset:0;width:100%;height:100%;}
+#synth-canvas{position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;z-index:5;}
+#hud{position:absolute;top:0;left:0;right:0;display:flex;
+  align-items:center;justify-content:space-between;padding:9px 12px;
+  background:linear-gradient(180deg,rgba(8,10,15,.9) 0%,transparent 100%);
+  z-index:10;pointer-events:none;}
+.ht{font-family:'Syncopate',sans-serif;font-size:10px;letter-spacing:3px;color:var(--gold);}
+.hr{display:flex;align-items:center;gap:8px;font-size:9px;}
+.hd{width:6px;height:6px;border-radius:50%;background:var(--dim);transition:all .3s;}
+.hd.on{background:var(--green);box-shadow:0 0 7px var(--green);}
+.hd.sus{background:var(--blue);box-shadow:0 0 9px var(--blue);animation:dp 1s infinite;}
+.mlb{font-size:9px;letter-spacing:1px;padding:2px 6px;border:1px solid var(--b);color:var(--dim);}
+.mlb.active{border-color:var(--purple);color:var(--purple);}
+#nflash{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%);
+  font-family:'Syncopate',sans-serif;font-size:24px;letter-spacing:5px;
+  color:var(--gold);text-shadow:0 0 25px var(--gold);opacity:0;
+  transition:opacity .1s;pointer-events:none;z-index:20;}
+#ml-log{position:absolute;bottom:155px;left:8px;font-size:9px;
+  letter-spacing:1px;color:rgba(184,122,232,.7);pointer-events:none;z-index:10;}
+
+/* Piano */
+#piano-wrap{position:relative;height:145px;background:#06080c;
+  border-top:1px solid var(--b);flex-shrink:0;overflow:hidden;}
+#piano-canvas{width:100%;height:calc(100% - 36px);display:block;}
+#oct-bar{position:absolute;bottom:0;left:0;right:0;height:36px;
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  background:rgba(6,8,12,.85);border-top:1px solid var(--b);}
+.ob{width:28px;height:28px;background:transparent;border:1px solid var(--b);
+  color:var(--dim);font-size:15px;cursor:pointer;-webkit-appearance:none;
+  display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.ob:active{border-color:var(--gold);color:var(--gold);}
+#oct-lbl{font-size:10px;letter-spacing:2px;color:var(--dim);min-width:70px;text-align:center;}
+
+/* Hand warning */
+#hand-warn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-size:11px;letter-spacing:2px;color:rgba(232,122,122,.8);
+  text-align:center;pointer-events:none;z-index:15;line-height:2;}
+</style>
+</head>
+<body>
+
+<!-- ═══ GLOBAL CAMERA (always on) ═══ -->
+<div id="cam-layer">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="cam-canvas"></canvas>
+</div>
+
+<!-- ═══ INTRO ═══ -->
+<div class="screen opaque active" id="s-intro">
+  <div class="tag">VIRTUAL PIANO · ML v4</div>
+  <div class="title">PIANO<br>AI</div>
+  <div class="sub">НЕЙРОСЕТЬ ПОД ТВОИ РУКИ</div>
+  <div style="max-width:320px;font-size:11px;color:var(--dim);
+    line-height:2.2;text-align:center;margin-bottom:28px;">
+    <span style="color:var(--gold)">►</span> Калибровка 2 мин — одна рука<br>
+    <span style="color:var(--gold)">►</span> Автосбор с обратным отсчётом<br>
+    <span style="color:var(--gold)">►</span> Модель учится во время игры<br>
+    <span style="color:var(--gold)">►</span> Сохраняется между сессиями
+  </div>
+  <div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:8px;">
+    <button class="btn" id="btn-calib">КАЛИБРОВКА + ОБУЧЕНИЕ</button>
+    <button class="btn dim" id="btn-load">ЗАГРУЗИТЬ СОХРАНЁННУЮ МОДЕЛЬ</button>
+  </div>
+</div>
+
+<!-- ═══ CALIBRATION ═══ -->
+<div class="screen" id="s-calib">
+  <div class="card">
+    <div class="sdots" id="sdots"></div>
+    <div class="cstep-title" id="cs-title">—</div>
+    <div class="cstep-desc"  id="cs-desc">—</div>
+
+    <!-- Countdown ring -->
+    <div id="countdown-ring">
+      <canvas id="cring-canvas"></canvas>
+      <div id="countdown-num">—</div>
+    </div>
+
+    <!-- Finger bars -->
+    <div class="fings" id="fings"></div>
+
+    <!-- Status -->
+    <div class="cstatus" id="cstatus">—</div>
+
+    <!-- Progress -->
+    <div style="width:100%;height:2px;background:var(--b);margin-bottom:10px;">
+      <div style="height:100%;background:linear-gradient(90deg,var(--gold),var(--green));
+        transition:width .3s;box-shadow:0 0 5px var(--gold);" id="cpbar"></div>
+    </div>
+
+    <div style="font-size:10px;letter-spacing:1px;color:var(--dim);text-align:center;">
+      СЭМПЛОВ: <span style="color:var(--gold)" id="scount">0</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TRAINING ═══ -->
+<div class="screen" id="s-train">
+  <div class="card" style="max-width:400px;">
+    <div class="tag" style="margin-bottom:12px;">ОБУЧЕНИЕ НЕЙРОСЕТИ</div>
+    <div class="loss-wrap"><canvas id="loss-canvas"></canvas><div class="loss-lbl">LOSS</div></div>
+    <div class="tstats">
+      <div class="ts"><div class="tsl">ЭПОХА</div><div class="tsv" id="t-ep">0</div></div>
+      <div class="ts"><div class="tsl">ТОЧНОСТЬ</div><div class="tsv g" id="t-acc">—</div></div>
+      <div class="ts"><div class="tsl">LOSS</div><div class="tsv b" id="t-loss">—</div></div>
+      <div class="ts"><div class="tsl">СЭМПЛОВ</div><div class="tsv" id="t-samp">—</div></div>
+    </div>
+    <div class="ebar-w"><div class="ebar" id="ebar" style="width:0%"></div></div>
+    <div class="elbl" id="elbl">ПОДГОТОВКА...</div>
+  </div>
+</div>
+
+<!-- ═══ RESULT ═══ -->
+<div class="screen opaque" id="s-result">
+  <div class="tag">ГОТОВО</div>
+  <div class="title" style="font-size:clamp(18px,5vw,28px);">МОДЕЛЬ<br>ГОТОВА</div>
+  <div class="card" style="max-width:320px;">
+    <div class="ring-w"><canvas id="ring-canvas"></canvas><div class="ring-n" id="ring-n">—</div></div>
+    <table class="rp">
+      <tr><td>УГОЛ КАМЕРЫ</td><td id="rp-a">—</td></tr>
+      <tr><td>СКОРОСТЬ НАЖАТИЯ</td><td id="rp-s">—</td></tr>
+      <tr><td>ПАРАМЕТРОВ</td><td id="rp-p">—</td></tr>
+      <tr><td>ТОЧНОСТЬ</td><td id="rp-ac">—</td></tr>
+    </table>
+    <button class="btn" id="btn-play">НАЧАТЬ ИГРУ</button>
+    <button class="btn dim" id="btn-recalib" style="margin-top:6px;font-size:9px;">ПЕРЕКАЛИБРОВАТЬ</button>
+  </div>
+</div>
+
+<!-- ═══ APP ═══ -->
+<div id="app">
+  <div id="play-cam">
+    <video id="play-video" autoplay playsinline muted></video>
+    <canvas id="synth-canvas"></canvas>
+    <canvas id="play-canvas"></canvas>
+    <div id="hud">
+      <div class="ht">PIANO·AI</div>
+      <div class="hr">
+        <div class="hd" id="hd-hand"></div>
+        <span id="ht-hand" style="color:var(--dim);">ЖДУ РУКИ</span>
+        <div class="hd" id="hd-sus"></div>
+        <div class="mlb" id="mlb">ML</div>
+      </div>
+    </div>
+    <div id="nflash"></div>
+    <div id="ml-log"></div>
+    <div id="hand-warn"></div>
+  </div>
+  <div id="piano-wrap">
+    <canvas id="piano-canvas"></canvas>
+    <div id="oct-bar">
+      <button class="ob" id="oct-dn">−</button>
+      <span id="oct-lbl">C4–C5</span>
+      <button class="ob" id="oct-up">+</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+// ═══════════════════════════════════════════════════
+//  CALIBRATION STEPS
+//  Автоматический сбор с обратным отсчётом
+//  Кнопок нет — всё по таймеру
+// ═══════════════════════════════════════════════════
+const STEPS = [
+  { title: 'НЕЙТРАЛЬНАЯ ПОЗИЦИЯ',
+    desc:  'Держи ОДНУ руку горизонтально. Пальцы расслаблены и чуть согнуты вниз. Удерживай позицию.',
+    finger: -1, label: [0,0,0,0,0], collectSec: 4, pauseSec: 3 },
+  { title: 'НАЖМИ УКАЗАТЕЛЬНЫЙ',
+    desc:  'Быстро опускай и поднимай ТОЛЬКО указательный палец несколько раз.',
+    finger: 0, label: [1,0,0,0,0], collectSec: 4, pauseSec: 3 },
+  { title: 'НАЖМИ СРЕДНИЙ',
+    desc:  'Быстро опускай и поднимай ТОЛЬКО средний палец несколько раз.',
+    finger: 1, label: [0,1,0,0,0], collectSec: 4, pauseSec: 3 },
+  { title: 'НАЖМИ БЕЗЫМЯННЫЙ',
+    desc:  'Быстро опускай и поднимай ТОЛЬКО безымянный палец несколько раз.',
+    finger: 2, label: [0,0,1,0,0], collectSec: 4, pauseSec: 3 },
+  { title: 'НАЖМИ МИЗИНЕЦ',
+    desc:  'Быстро опускай и поднимай ТОЛЬКО мизинец несколько раз.',
+    finger: 3, label: [0,0,0,1,0], collectSec: 4, pauseSec: 3 },
+  { title: 'СОЖМИ КУЛАК',
+    desc:  'Сожми руку в кулак и держи несколько секунд.',
+    finger: -2, label: [0,0,0,0,1], collectSec: 3, pauseSec: 3 },
+];
+const FNAMES = ['УК','СР','БЗ','МЗ'];
+const FPS_COLLECT = 30; // approximate
+const SAMPLES_PER_SEC = 20;
+
+// ═══════════════════════════════════════════════════
+//  FEATURES  (71 числ)
+// ═══════════════════════════════════════════════════
+const TIPS = [8,12,16,20];
+const MCPS = [5,9,13,17];
+const CONN = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]
+];
+
+const tipHist  = {}, palmHist = {};
+const HLEN = 8;
+
+function rec(buf, k, y) {
+  if (!buf[k]) buf[k]=[];
+  buf[k].push({y, t:performance.now()});
+  if (buf[k].length>HLEN) buf[k].shift();
+}
+
+function vel(buf, k) {
+  const h=buf[k]; if (!h||h.length<3) return 0;
+  const dt=(h[h.length-1].t-h[0].t)/1000;
+  return dt<.001?0:(h[h.length-1].y-h[0].y)/dt;
+}
+
+function extractFeatures(lm, hi) {
+  const wx=lm[0].x, wy=lm[0].y, wz=lm[0].z;
+  const dx=lm[9].x-wx, dy=lm[9].y-wy, dz=lm[9].z-wz;
+  const sc=Math.sqrt(dx*dx+dy*dy+dz*dz)+1e-6;
+  const f=[];
+  for (let i=0;i<21;i++){
+    f.push((lm[i].x-wx)/sc);
+    f.push((lm[i].y-wy)/sc);
+    f.push((lm[i].z-wz)/sc);
+  }
+  rec(palmHist,hi,lm[0].y);
+  const pv=vel(palmHist,hi);
+  for (let fi=0;fi<4;fi++){
+    const fid=`${hi}_${fi}`;
+    rec(tipHist,fid,lm[TIPS[fi]].y);
+    const av=vel(tipHist,fid);
+    f.push(Math.tanh(av*3));
+    f.push(Math.tanh((av-pv)*3));
+  }
+  return f; // 71
+}
+
+// ═══════════════════════════════════════════════════
+//  ML MODEL
+// ═══════════════════════════════════════════════════
+const IN=71, OUT=5;
+let model=null;
+let adaptBuf=[], lastAdaptT=0;
+const ADAPT_INT=30000, ADAPT_EP=5, BUF_MAX=300;
+const MKEY='piano_ml_v4';
+// Higher threshold = fewer false positives
+const ML_THRESH=0.72;
+
+function buildModel(){
+  const m=tf.sequential();
+  m.add(tf.layers.dense({inputShape:[IN],units:48,activation:'relu',
+    kernelInitializer:'glorotUniform'}));
+  m.add(tf.layers.batchNormalization());
+  m.add(tf.layers.dropout({rate:0.25}));
+  m.add(tf.layers.dense({units:24,activation:'relu'}));
+  m.add(tf.layers.dropout({rate:0.1}));
+  m.add(tf.layers.dense({units:OUT,activation:'sigmoid'}));
+  m.compile({optimizer:tf.train.adam(0.002),
+    loss:'binaryCrossentropy',metrics:['accuracy']});
+  return m;
+}
+
+const lossH=[];
+async function trainModel(xs, ys, onEp){
+  const xT=tf.tensor2d(xs,[xs.length,IN]);
+  const yT=tf.tensor2d(ys,[ys.length,OUT]);
+  await model.fit(xT,yT,{
+    epochs:80,batchSize:16,shuffle:true,validationSplit:.15,
+    callbacks:{onEpochEnd:async(ep,logs)=>{
+      lossH.push(logs.loss); onEp(ep,logs); await tf.nextFrame();
+    }}
+  });
+  xT.dispose(); yT.dispose();
+}
+
+async function adaptModel(){
+  if (adaptBuf.length<20) return;
+  const xs=adaptBuf.map(s=>s.f), ys=adaptBuf.map(s=>s.l);
+  const xT=tf.tensor2d(xs,[xs.length,IN]);
+  const yT=tf.tensor2d(ys,[ys.length,OUT]);
+  await model.fit(xT,yT,{epochs:ADAPT_EP,batchSize:16,shuffle:true,verbose:0});
+  xT.dispose(); yT.dispose();
+  saveW();
+  if (adaptBuf.length>BUF_MAX) adaptBuf=adaptBuf.slice(-100);
+}
+
+function saveW(){
+  try{
+    const w=model.getWeights().map(t=>Array.from(t.dataSync()));
+    localStorage.setItem(MKEY,JSON.stringify(w));
+  }catch(e){}
+}
+
+function loadW(){
+  try{
+    const raw=localStorage.getItem(MKEY);
+    if (!raw) return false;
+    const wArr=JSON.parse(raw);
+    const tensors=wArr.map((w,i)=>{
+      const shape=model.getWeights()[i].shape;
+      return tf.tensor(w,shape);
+    });
+    model.setWeights(tensors);
+    tensors.forEach(t=>t.dispose());
+    return true;
+  }catch(e){return false;}
+}
+
+function predict(f){
+  return tf.tidy(()=>{
+    const t=tf.tensor2d([f],[1,IN]);
+    return Array.from(model.predict(t).dataSync());
+  });
+}
+
+// ═══════════════════════════════════════════════════
+//  MEDIAPIPE
+// ═══════════════════════════════════════════════════
+// Fix 3: all DOM refs at top — safe against hoisting issues in modules
+const globalVideo    = document.getElementById('video');
+const globalCanvas   = document.getElementById('cam-canvas');
+const gCtx           = globalCanvas.getContext('2d');
+const pianoCanvas    = document.getElementById('piano-canvas');
+const pCtx           = pianoCanvas.getContext('2d');
+const synthCanvas    = document.getElementById('synth-canvas');
+const sCtx           = synthCanvas.getContext('2d');
+const nf             = document.getElementById('nflash');
+
+let mp=null, lastVT=-1;
+
+async function initMP(){
+  const vis=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  mp=await HandLandmarker.createFromOptions(vis,{
+    baseOptions:{
+      modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate:"GPU"
+    },
+    runningMode:"VIDEO",numHands:1, // ONE hand only
+    minHandDetectionConfidence:0.65,
+    minHandPresenceConfidence:0.65,
+    minTrackingConfidence:0.55,
+  });
+}
+
+async function initCam(){
+  const stream=await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+  globalVideo.srcObject=stream;
+  await new Promise(r=>globalVideo.onloadedmetadata=r);
+  globalVideo.play();
+  globalCanvas.width =globalVideo.videoWidth;
+  globalCanvas.height=globalVideo.videoHeight;
+  // Also pipe to play-video in app
+  document.getElementById('play-video').srcObject=stream;
+}
+
+// ═══════════════════════════════════════════════════
+//  SCREEN MANAGER
+// ═══════════════════════════════════════════════════
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el=document.getElementById(id);
+  if (el) el.classList.add('active');
+  // Show/hide global camera
+  const showCam=['s-calib','s-train'].includes(id);
+  document.getElementById('cam-layer').style.opacity= showCam?'1':'0';
+}
+
+// ═══════════════════════════════════════════════════
+//  CALIBRATION FLOW — fully automatic with countdown
+// ═══════════════════════════════════════════════════
+let calibStep=0, calibData=[], calibRunning=false;
+let calibFrameCallback=null; // called every detected frame
+
+function buildCalibUI(){
+  const d=document.getElementById('sdots');
+  d.innerHTML=STEPS.map((_,i)=>`<div class="sdot${i===0?' active':''}"></div>`).join('');
+  const fi=document.getElementById('fings');
+  fi.innerHTML=FNAMES.map((n,i)=>`
+    <div class="fi" id="fi${i}">
+      <div class="fbw"><div class="fb" style="height:5%"></div></div>
+      <div class="fl">${n}</div>
+    </div>`).join('');
+}
+
+function updateStepUI(step){
+  const s=STEPS[step];
+  document.getElementById('cs-title').textContent=s.title;
+  document.getElementById('cs-desc').textContent =s.desc;
+  document.getElementById('cpbar').style.width=(step/STEPS.length*100)+'%';
+  document.querySelectorAll('.sdot').forEach((d,i)=>{
+    d.className='sdot'+(i<step?' done':i===step?' active':'');
+  });
+  FNAMES.forEach((_,i)=>{
+    const el=document.getElementById(`fi${i}`);
+    if(el) el.className='fi'+(i===s.finger?' active':'');
+  });
+}
+
+function setCountdown(n, total){
+  const c=document.getElementById('cring-canvas');
+  const ctx=c.getContext('2d');
+  c.width=c.offsetWidth||90; c.height=c.offsetHeight||90;
+  const cx=c.width/2, cy=c.height/2, r=cx-6;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.strokeStyle='#1c2333'; ctx.lineWidth=6; ctx.stroke();
+  const pct=n/total;
+  ctx.beginPath();
+  ctx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+pct*Math.PI*2);
+  ctx.strokeStyle= pct>0.5?'#e8c97a':'#7ae8b8';
+  ctx.lineWidth=6; ctx.lineCap='round';
+  ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=10;
+  ctx.stroke(); ctx.shadowBlur=0;
+  document.getElementById('countdown-num').textContent=Math.ceil(n)||'✓';
+}
+
+function animFinger(fingerIdx, lm){
+  FNAMES.forEach((_,i)=>{
+    const bar=document.querySelector(`#fi${i} .fb`);
+    if (!bar) return;
+    // Use actual landmark data if available
+    if (lm && lm.length>0){
+      const tipY=lm[TIPS[i]].y, mcpY=lm[MCPS[i]].y;
+      const h=Math.max(4, Math.min(95, (tipY-mcpY+0.1)*400));
+      bar.style.height=h+'%';
+    } else {
+      const isAct=i===fingerIdx;
+      bar.style.height=(isAct?30+Math.random()*50:4+Math.random()*10)+'%';
+    }
+  });
+}
+
+// Run one calibration step: pause → collect
+async function runCalibStep(stepIdx){
+  const step=STEPS[stepIdx];
+  updateStepUI(stepIdx);
+
+  // ── PAUSE PHASE: countdown without collecting ──
+  document.getElementById('cstatus').textContent='ПОДГОТОВЬСЯ...';
+  document.getElementById('cstatus').style.color='var(--gold)';
+  let pauseLeft=step.pauseSec;
+  setCountdown(pauseLeft, step.pauseSec);
+
+  await new Promise(resolve=>{
+    const t=setInterval(()=>{
+      pauseLeft-=0.1;
+      setCountdown(Math.max(0,pauseLeft), step.pauseSec);
+      if (pauseLeft<=0){ clearInterval(t); resolve(); }
+    }, 100);
+  });
+
+  // ── COLLECT PHASE: gather samples ──
+  document.getElementById('cstatus').textContent='ЗАПИСЫВАЮ...';
+  document.getElementById('cstatus').style.color='var(--green)';
+  const targetSamples=step.collectSec*SAMPLES_PER_SEC;
+  let collected=0;
+  let collectLeft=step.collectSec;
+  setCountdown(collectLeft, step.collectSec);
+
+  await new Promise(resolve=>{
+    // Timer for countdown display
+    const displayTimer=setInterval(()=>{
+      collectLeft-=0.1;
+      setCountdown(Math.max(0,collectLeft), step.collectSec);
+      if (collectLeft<=0) clearInterval(displayTimer);
+    },100);
+
+    // Frame callback — called from detection loop
+    calibFrameCallback=(feats, lm)=>{
+      if (Math.random()<0.6){ // subsample to targetSamples approx
+        calibData.push({f:feats, l:step.label});
+        collected++;
+        document.getElementById('scount').textContent=calibData.length;
+        animFinger(step.finger, lm);
+      }
+      if (collected>=targetSamples){
+        calibFrameCallback=null;
+        clearInterval(displayTimer);
+        resolve();
+      }
+    };
+
+    // Fallback timeout
+    setTimeout(()=>{
+      calibFrameCallback=null;
+      clearInterval(displayTimer);
+      resolve();
+    }, step.collectSec*1000+500);
+  });
+}
+
+async function runAllCalib(){
+  calibData=[]; calibStep=0;
+  buildCalibUI();
+  showScreen('s-calib');
+
+  for (let i=0; i<STEPS.length; i++){
+    calibStep=i;
+    await runCalibStep(i);
+  }
+
+  document.getElementById('cstatus').textContent='✓ КАЛИБРОВКА ЗАВЕРШЕНА';
+  document.getElementById('cpbar').style.width='100%';
+  setCountdown(0, 1);
+  await sleep(600);
+  startTraining();
+}
+
+// ═══════════════════════════════════════════════════
+//  TRAINING
+// ═══════════════════════════════════════════════════
+async function startTraining(){
+  showScreen('s-train');
+  lossH.length=0;
+  model=buildModel();
+  document.getElementById('t-samp').textContent=calibData.length;
+  const EPOCHS=80;
+  const xs=calibData.map(d=>d.f);
+  const ys=calibData.map(d=>d.l);
+
+  await trainModel(xs, ys,(ep,logs)=>{
+    const acc=((logs.acc||logs.accuracy||0)*100).toFixed(1);
+    document.getElementById('t-ep').textContent   =ep+1;
+    document.getElementById('t-acc').textContent  =acc+'%';
+    document.getElementById('t-loss').textContent =logs.loss.toFixed(4);
+    document.getElementById('ebar').style.width   =((ep+1)/EPOCHS*100)+'%';
+    document.getElementById('elbl').textContent   =
+      ep+1<EPOCHS?`ЭПОХА ${ep+1} / ${EPOCHS}`:'✓ ГОТОВО';
+    drawLoss();
+  });
+
+  saveW();
+  const acc=parseFloat(document.getElementById('t-acc').textContent);
+  showResult(acc);
+}
+
+function drawLoss(){
+  const c=document.getElementById('loss-canvas');
+  if (!c) return;
+  const ctx=c.getContext('2d');
+  c.width=c.offsetWidth; c.height=c.offsetHeight;
+  const W=c.width,H=c.height;
+  ctx.clearRect(0,0,W,H);
+  if (lossH.length<2) return;
+  const mx=Math.max(...lossH), mn=Math.min(...lossH);
+  ctx.beginPath();
+  lossH.forEach((l,i)=>{
+    const x=(i/(lossH.length-1))*W;
+    const y=H-((l-mn)/(mx-mn+.001))*(H-10)-5;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle='#b87ae8';ctx.lineWidth=2;
+  ctx.shadowColor='#b87ae8';ctx.shadowBlur=5;
+  ctx.stroke();ctx.shadowBlur=0;
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();
+  ctx.fillStyle='rgba(184,122,232,.07)';ctx.fill();
+}
+
+// ═══════════════════════════════════════════════════
+//  RESULT
+// ═══════════════════════════════════════════════════
+function showResult(acc){
+  showScreen('s-result');
+  const c=document.getElementById('ring-canvas');
+  const ctx=c.getContext('2d');
+  c.width=c.offsetWidth||100; c.height=c.offsetHeight||100;
+  const cx=c.width/2,cy=c.height/2,r=Math.min(cx,cy)-7;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.strokeStyle='#1c2333';ctx.lineWidth=7;ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+(acc/100)*Math.PI*2);
+  ctx.strokeStyle='#7ae8b8';ctx.lineWidth=7;ctx.lineCap='round';
+  ctx.shadowColor='#7ae8b8';ctx.shadowBlur=12;ctx.stroke();ctx.shadowBlur=0;
+  document.getElementById('ring-n').textContent=Math.round(acc)+'%';
+  document.getElementById('rp-ac').textContent=acc.toFixed(1)+'%';
+  document.getElementById('rp-p').textContent='~3 200';
+  if (calibData.length>0){
+    const s=calibData[0].f;
+    document.getElementById('rp-a').textContent=Math.round(Math.abs(s[2])*35)+'°';
+    const spd=calibData.filter(d=>d.l[0]===1).map(d=>d.f[63]);
+    const av=spd.length?spd.reduce((a,b)=>a+b,0)/spd.length:0;
+    document.getElementById('rp-s').textContent=av>0.3?'БЫСТРОЕ':av>0.1?'СРЕДНЕЕ':'МЯГКОЕ';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  DETECTION LOOP
+// ═══════════════════════════════════════════════════
+function detectLoop(){
+  if (!mp||globalVideo.readyState<2){requestAnimationFrame(detectLoop);return;}
+  const vt=globalVideo.currentTime;
+  if (vt!==lastVT){
+    lastVT=vt;
+    const res=mp.detectForVideo(globalVideo,performance.now());
+    onResult(res);
+  }
+  requestAnimationFrame(detectLoop);
+}
+
+function onResult(res){
+  // Clear global cam canvas
+  gCtx.clearRect(0,0,globalCanvas.width,globalCanvas.height);
+
+  const lms=res.landmarks;
+  const hasHand=lms&&lms.length>0;
+
+  if (hasHand){
+    const lm=lms[0]; // single hand
+
+    // Always draw skeleton on global canvas (visible during calib/training)
+    drawSkel(gCtx,lm,globalCanvas.width,globalCanvas.height,'#7ae8b8',0.65);
+
+    // Feed calibration callback
+    if (calibFrameCallback){
+      const feats=extractFeatures(lm,0);
+      calibFrameCallback(feats, lm);
+    }
+
+    // ML inference in play mode
+    if (model&&appRunning){
+      playOnResult(lm);
+    }
+  } else {
+    // No hand
+    if (calibFrameCallback){
+      // Still tick so we don't hang — but don't collect garbage data
+    }
+  }
+
+  // Also draw on play canvas when in app
+  if (appRunning){
+    const pc=document.getElementById('play-canvas');
+    const pCtx2=pc.getContext('2d');
+    pCtx2.clearRect(0,0,pc.width,pc.height);
+    if (hasHand){
+      const lm=lms[0];
+      drawSkel(pCtx2,lm,pc.width,pc.height,'#7ae8b8',0.65);
+      // Update hand status
+      document.getElementById('hd-hand').className='hd on';
+      document.getElementById('ht-hand').textContent='РУКА НАЙДЕНА';
+      document.getElementById('hand-warn').textContent='';
+    } else {
+      document.getElementById('hd-hand').className='hd';
+      document.getElementById('ht-hand').textContent='ЖДУ РУКИ';
+      document.getElementById('hand-warn').textContent='ДЕРЖИ РУКУ ПЕРЕД КАМЕРОЙ';
+    }
+  }
+}
+
+function drawSkel(ctx,lm,W,H,col,alpha){
+  ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.globalAlpha=alpha;
+  CONN.forEach(([a,b])=>{
+    ctx.beginPath();
+    ctx.moveTo((1-lm[a].x)*W,lm[a].y*H);
+    ctx.lineTo((1-lm[b].x)*W,lm[b].y*H);
+    ctx.stroke();
+  });
+  for (let i=0;i<21;i++){
+    ctx.beginPath();
+    ctx.arc((1-lm[i].x)*W,lm[i].y*H,2.5,0,Math.PI*2);
+    ctx.fillStyle=col;ctx.globalAlpha=alpha+0.15;ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
+// ═══════════════════════════════════════════════════
+//  PLAY MODE
+// ═══════════════════════════════════════════════════
+let appRunning=false;
+let sustainOn=false;
+const lastPlayT={};
+const COOL=155;
+let preds=[0,0,0,0,0];
+
+function playOnResult(lm){
+  preds=predict(extractFeatures(lm,0));
+  sustainOn=preds[4]>ML_THRESH;
+
+  const pc=document.getElementById('play-canvas');
+  const ctx=pc.getContext('2d');
+
+  // Draw confidence bars + fingertip highlights
+  for (let fi=0;fi<4;fi++){
+    const conf=preds[fi];
+    const tx=(1-lm[TIPS[fi]].x)*pc.width;
+    const ty=lm[TIPS[fi]].y*pc.height;
+    const r=7+conf*9;
+
+    ctx.beginPath();ctx.arc(tx,ty,r,0,Math.PI*2);
+    ctx.fillStyle=conf>ML_THRESH
+      ?`rgba(232,201,122,${0.65+conf*.35})`
+      :`rgba(122,232,184,0.35)`;
+    ctx.fill();
+
+    if (conf>ML_THRESH){
+      ctx.beginPath();ctx.arc(tx,ty,r+7,0,Math.PI*2);
+      ctx.strokeStyle='#e8c97a';ctx.lineWidth=2;
+      ctx.globalAlpha=conf*.65;ctx.stroke();ctx.globalAlpha=1;
+
+      // Trigger note
+      const px=(1-lm[TIPS[fi]].x)*pianoCanvas.width;
+      const kid=findKey(px);
+      const now=Date.now();
+      if (kid&&(!lastPlayT[kid]||now-lastPlayT[kid]>COOL)){
+        lastPlayT[kid]=now;
+        const key=keys.find(k=>k.id===kid);
+        if (key){
+          playNote(key.freq, 0.35+conf*0.65);
+          activeKeys[kid]={time:now,velocity:conf,sustain:sustainOn};
+          spawnNote(kid,conf);
+          showFlash(key.name+key.octave);
+          // Fix 1: only add to adapt buffer when model is very confident
+          // Avoids confirmation bias — don't reinforce uncertain predictions
+          if (conf > 0.92){
+            adaptBuf.push({f:extractFeatures(lm,0),l:buildLbl(fi)});
+            if (adaptBuf.length>BUF_MAX) adaptBuf=adaptBuf.slice(-BUF_MAX);
+          }
+        }
+      }
+    }
+
+    // Mini confidence bar
+    ctx.fillStyle='rgba(0,0,0,.5)';
+    ctx.fillRect(tx-14,ty-26,28,3);
+    ctx.fillStyle=conf>ML_THRESH?'#e8c97a':'#3a4a60';
+    ctx.fillRect(tx-14,ty-26,28*conf,3);
+  }
+
+  // Sustain
+  document.getElementById('hd-sus').className='hd'+(sustainOn?' sus':'');
+
+  // Periodic adaptation
+  const now=Date.now();
+  if (now-lastAdaptT>ADAPT_INT&&adaptBuf.length>20){
+    lastAdaptT=now;
+    adaptModel().then(()=>{
+      document.getElementById('ml-log').textContent='⟳ ДООБУЧЕНО';
+      setTimeout(()=>document.getElementById('ml-log').textContent='',3000);
+    });
+  }
+
+  const t=Math.max(0,Math.round((ADAPT_INT-(Date.now()-lastAdaptT))/1000));
+  const mlb=document.getElementById('mlb');
+  mlb.textContent=adaptBuf.length>0?`ML ↺${t}с`:'ML';
+  mlb.className='mlb'+(t<6&&adaptBuf.length>20?' active':'');
+}
+
+function buildLbl(fi){
+  return [0,1,2,3].map(i=>i===fi?1:0).concat([0]);
+}
+
+// ═══════════════════════════════════════════════════
+//  AUDIO
+// ═══════════════════════════════════════════════════
+let aCtx=null,revNode=null;
+function getACtx(){
+  if (!aCtx){
+    aCtx=new(window.AudioContext||window.webkitAudioContext)();
+    const len=aCtx.sampleRate*1.6,buf=aCtx.createBuffer(2,len,aCtx.sampleRate);
+    for (let c=0;c<2;c++){
+      const d=buf.getChannelData(c);
+      for (let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.5);
+    }
+    revNode=aCtx.createConvolver();revNode.buffer=buf;revNode.connect(aCtx.destination);
+  }
+  if (aCtx.state==='suspended') aCtx.resume();
+  return aCtx;
+}
+
+function playNote(freq,vel=0.6){
+  const ctx=getACtx(),now=ctx.currentTime,dur=sustainOn?3.5:1.4,vol=0.15+vel*.7;
+  const master=ctx.createGain();
+  [[1,.55],[2,.2],[3,.1],[4.08,.07],[5.02,.04]].forEach(([f,w])=>{
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type='sine';o.frequency.value=freq*f;g.gain.value=w*vol;
+    o.connect(g);g.connect(master);o.start(now);o.stop(now+dur+.1);
+  });
+  master.gain.setValueAtTime(0,now);
+  master.gain.linearRampToValueAtTime(vol,now+.005);
+  master.gain.exponentialRampToValueAtTime(vol*.3,now+.06);
+  master.gain.exponentialRampToValueAtTime(.0001,now+dur);
+  const dry=ctx.createGain(),wet=ctx.createGain();
+  dry.gain.value=.78;wet.gain.value=.22;
+  master.connect(dry);dry.connect(ctx.destination);
+  if (revNode){master.connect(wet);wet.connect(revNode);}
+}
+
+// ═══════════════════════════════════════════════════
+//  PIANO
+// ═══════════════════════════════════════════════════
+const ALL=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const WHITE=['C','D','E','F','G','A','B'];
+const BAFT={C:'C#',D:'D#',F:'F#',G:'G#',A:'A#'};
+let startOct=4,numOct=2,keys=[],keyRects={},activeKeys={};
+
+function nFreq(n,o){return 440*Math.pow(2,((o+1)*12+ALL.indexOf(n)-69)/12);}
+function buildKeys(){
+  keys=[];
+  for(let o=0;o<numOct;o++){const oc=startOct+o;
+    for(const n of ALL)keys.push({id:`${n}${oc}`,name:n,octave:oc,freq:nFreq(n,oc)});}
+}
+function layoutPiano(W,H){
+  keyRects={};
+  const ws=keys.filter(k=>!k.name.includes('#'));
+  const ww=W/ws.length;
+  ws.forEach((k,i)=>{keyRects[k.id]={x:i*ww,y:0,w:ww-1,h:H,isBlack:false};});
+  const bw=ww*.62,bh=H*.62;
+  for(let o=0;o<numOct;o++){const oc=startOct+o;
+    WHITE.forEach((wn,wi)=>{
+      if(BAFT[wn]){const kid=`${BAFT[wn]}${oc}`;
+        keyRects[kid]={x:(o*7+wi)*ww+ww-bw/2,y:0,w:bw,h:bh,isBlack:true};}
+    });
+  }
+}
+function findKey(px){
+  for(const[k,r]of Object.entries(keyRects))if(r.isBlack&&px>=r.x&&px<=r.x+r.w)return k;
+  for(const[k,r]of Object.entries(keyRects))if(!r.isBlack&&px>=r.x&&px<=r.x+r.w)return k;
+  return null;
+}
+
+// pianoCanvas declared at top
+
+function resizePiano(){
+  const wrap=document.getElementById('piano-wrap');
+  pianoCanvas.width=wrap.clientWidth;pianoCanvas.height=wrap.clientHeight-36;
+  layoutPiano(pianoCanvas.width,pianoCanvas.height);
+}
+
+function drawPiano(){
+  const W=pianoCanvas.width,H=pianoCanvas.height,now=Date.now(),HOLD=260;
+  pCtx.clearRect(0,0,W,H);
+  for(const[k,r]of Object.entries(keyRects)){
+    if(r.isBlack)continue;
+    const ak=activeKeys[k];
+    // Fix 4: sustain keeps key lit as long as sound plays
+    const on=ak&&(now-ak.time<(ak&&ak.sustain?3500:HOLD));
+    pCtx.fillStyle=on?'#e8c97a':'#ddd9cc';
+    pCtx.fillRect(r.x,r.y,r.w,r.h);
+    pCtx.strokeStyle=on?'rgba(232,201,122,.5)':'#aba79a';pCtx.lineWidth=.5;
+    pCtx.strokeRect(r.x+.5,r.y+.5,r.w-1,r.h-1);
+    pCtx.fillStyle=on?'#5a3408':'#999';
+    pCtx.font=`${Math.max(8,r.w*.28)}px 'DM Mono',monospace`;
+    pCtx.textAlign='center';
+    pCtx.fillText(k.replace(/\d+/,''),r.x+r.w/2,r.y+r.h-5);
+    if(on){pCtx.shadowColor='#e8c97a';pCtx.shadowBlur=10;
+      pCtx.fillStyle='rgba(232,201,122,.2)';pCtx.fillRect(r.x,r.y,r.w,r.h);
+      pCtx.shadowBlur=0;}
+  }
+  for(const[k,r]of Object.entries(keyRects)){
+    if(!r.isBlack)continue;
+    const ak=activeKeys[k];
+    // Fix 4: sustain for black keys too
+    const on=ak&&(now-ak.time<(ak&&ak.sustain?3500:HOLD));
+    const g=pCtx.createLinearGradient(r.x,r.y,r.x,r.y+r.h);
+    if(on){g.addColorStop(0,'#7ab8e8');g.addColorStop(1,'#3a78a8');}
+    else{g.addColorStop(0,'#1a2028');g.addColorStop(1,'#070a0e');}
+    pCtx.fillStyle=g;pCtx.fillRect(r.x,r.y,r.w,r.h);
+    if(on){pCtx.shadowColor='#7ab8e8';pCtx.shadowBlur=14;
+      pCtx.fillStyle='rgba(122,184,232,.18)';pCtx.fillRect(r.x,r.y,r.w,r.h);
+      pCtx.shadowBlur=0;}
+  }
+  requestAnimationFrame(drawPiano);
+}
+
+// ═══════════════════════════════════════════════════
+//  SYNTHESIA
+// ═══════════════════════════════════════════════════
+// synthCanvas declared at top
+let falling=[];
+const NCOL={C:'#e87a7a',C$:'#e8a87a','C#':'#e8a87a',D:'#e8c97a','D#':'#c9e87a',
+  E:'#7ae8a8',F:'#7ae8d8','F#':'#7ab8e8',G:'#7a88e8',
+  'G#':'#a87ae8',A:'#c97ae8','A#':'#e87ac9',B:'#e87a98'};
+
+function spawnNote(kid,vel){
+  const r=keyRects[kid];if(!r)return;
+  const sx=synthCanvas.width/pianoCanvas.width;
+  const nm=kid.replace(/\d+/,'');
+  falling.push({x:r.x*sx,w:r.w*sx,y:synthCanvas.height,
+    h:14+vel*18,color:NCOL[nm]||'#e8c97a',alpha:.85});
+}
+
+function drawSynthesia(){
+  synthCanvas.width=synthCanvas.offsetWidth;
+  synthCanvas.height=synthCanvas.offsetHeight;
+  sCtx.clearRect(0,0,synthCanvas.width,synthCanvas.height);
+  falling=falling.filter(n=>n.y+n.h>0);
+  for(const n of falling){
+    n.y-=2.5;n.alpha=Math.max(0,n.alpha-.003);
+    sCtx.beginPath();
+    if(sCtx.roundRect)sCtx.roundRect(n.x+1,n.y,n.w-2,n.h,3);
+    else sCtx.rect(n.x+1,n.y,n.w-2,n.h);
+    sCtx.fillStyle=n.color+Math.round(n.alpha*255).toString(16).padStart(2,'0');
+    sCtx.shadowColor=n.color;sCtx.shadowBlur=7;
+    sCtx.fill();sCtx.shadowBlur=0;
+  }
+  requestAnimationFrame(drawSynthesia);
+}
+
+// ═══════════════════════════════════════════════════
+//  NOTE FLASH
+// ═══════════════════════════════════════════════════
+let flashT=null;
+function showFlash(n){
+  nf.textContent=n;nf.style.opacity='1';
+  clearTimeout(flashT);flashT=setTimeout(()=>nf.style.opacity='0',400);
+}
+
+// ═══════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+// ═══════════════════════════════════════════════════
+//  BUTTONS & INIT
+// ═══════════════════════════════════════════════════
+let started=false;
+
+async function ensureStarted(){
+  if (started) return;
+  getACtx();
+  try{
+    // Fix 2: init first, hide screens only on success
+    await Promise.all([initMP(), initCam()]);
+    started=true;
+    buildKeys(); resizePiano();
+    detectLoop();
+  }catch(e){
+    alert('Ошибка камеры: '+e.message);
+    // screens remain visible — user can retry
+  }
+}
+
+document.getElementById('btn-calib').addEventListener('click', async()=>{
+  await ensureStarted();
+  runAllCalib();
+});
+
+document.getElementById('btn-load').addEventListener('click', async()=>{
+  await ensureStarted();
+  model=buildModel();
+  if(loadW()){
+    showResult(96);
+    document.getElementById('rp-a').textContent='ИЗ ПАМЯТИ';
+    document.getElementById('rp-s').textContent='ИЗ ПАМЯТИ';
+  } else {
+    alert('Сохранённой модели нет. Пройди калибровку.');
+  }
+});
+
+document.getElementById('btn-play').addEventListener('click',()=>{
+  showScreen('s-dummy'); // hide all screens
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('cam-layer').style.opacity='0';
+  document.getElementById('app').style.display='flex';
+  // resize play canvas
+  const pc=document.getElementById('play-canvas');
+  pc.width=globalVideo.videoWidth||640;
+  pc.height=globalVideo.videoHeight||480;
+  appRunning=true;
+  lastAdaptT=Date.now();
+  drawPiano(); drawSynthesia();
+});
+
+document.getElementById('btn-recalib').addEventListener('click',()=>{
+  document.getElementById('app').style.display='none';
+  appRunning=false;
+  document.getElementById('cam-layer').style.opacity='1';
+  calibStep=0;calibData=[];
+  buildCalibUI();
+  runAllCalib();
+});
+
+document.getElementById('oct-up').addEventListener('click',()=>{
+  if(startOct<6){startOct++;buildKeys();resizePiano();
+    document.getElementById('oct-lbl').textContent=`C${startOct}–C${startOct+numOct-1}`;}
+});
+document.getElementById('oct-dn').addEventListener('click',()=>{
+  if(startOct>2){startOct--;buildKeys();resizePiano();
+    document.getElementById('oct-lbl').textContent=`C${startOct}–C${startOct+numOct-1}`;}
+});
+
+window.addEventListener('resize',()=>{
+  globalCanvas.width =globalVideo.videoWidth||globalCanvas.width;
+  globalCanvas.height=globalVideo.videoHeight||globalCanvas.height;
+  const pc=document.getElementById('play-canvas');
+  if(appRunning){pc.width=globalVideo.videoWidth||640;pc.height=globalVideo.videoHeight||480;}
+  resizePiano();
+  synthCanvas.width=synthCanvas.offsetWidth;
+  synthCanvas.height=synthCanvas.offsetHeight;
+});
+</script>
+</body>
+</html>
