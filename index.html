@@ -169,6 +169,7 @@ import { HandLandmarker, FilesetResolver }
 // ═══════════════════════════════════════════════════
 const cfg = {
   velThresh:  0.30,   // 0.15–0.90
+  triggerBand: 0.35,  // bottom 35% of zone fires
   reverbWet:  0.30,   // 0–1
   showZones:  true,
   showLines:  true,
@@ -491,7 +492,7 @@ const DRUMS = [
 // ═══════════════════════════════════════════════════
 // MCP indices
 const MCP = [5, 9, 13, 17];
-const COOLDOWN  = 100; // ms min between hits on same drum
+const COOLDOWN  = 250; // ms min between hits on same drum
 const HLEN = 7;
 
 const strikeHist  = {}; // hi → [{y,t}]
@@ -523,9 +524,12 @@ function drumBounds(d, W, H) {
   return {
     cx: d.rx * W, cy: d.ry * H,
     hw: d.rw * W / 2, hh: d.rh * H / 2,
-    // activation line = top of zone
     lineY: (d.ry - d.rh / 2) * H,
   };
+}
+
+function drumBoundsXY(d, W, H) {
+  return { cx: d.rx*W, cy: d.ry*H, hw: d.rw*W/2, hh: d.rh*H/2 };
 }
 
 function inZone(sx, sy, d, W, H) {
@@ -538,34 +542,43 @@ function processHand(hi, lm, W, H) {
   recStrike(hi, yn);
   const vel = getStrikeVel(hi);
 
-  // Simple but reliable:
-  // Strike = velocity spike downward + hand in zone + cooldown
-  // No state machine — just velocity threshold
-  const drum = DRUMS.find(d => inZone(sx, sy, d, W, H));
-
-  const state = handState[hi] || { phase: 'idle', lastVel: 0 };
+  // POSITION-BASED detection — reliable even with fast motion
+  // Trigger band = bottom 35% of each drum zone
+  // State: must EXIT zone before triggering again (no double hits)
+  const state = handState[hi] || { phase: 'idle', lastDrumId: null };
   handState[hi] = state;
 
-  if (drum && vel > cfg.velThresh) {
-    const now = Date.now();
-    if (!drumCooldown[drum.id] || now - drumCooldown[drum.id] > COOLDOWN) {
-      // Extra check: velocity must be local peak (was lower before)
-      if (vel >= state.lastVel * 0.7) {
-        drumCooldown[drum.id] = now;
-        const normVel = Math.min(vel / 1.2, 1.0);
-        drum.sound(0.35 + normVel * 0.65);
-        flashDrum(drum.id);
-        spawnRipple(sx, sy, drum.color);
-        onHit(drum, normVel);
-        state.phase = 'hit';
-      }
-    }
-  } else if (!drum || vel < cfg.velThresh * 0.3) {
+  // Find zone hand is in
+  const zone = DRUMS.find(d => inZone(sx, sy, d, W, H));
+
+  if (!zone) {
+    // Hand outside all zones — reset so next entry can trigger
     state.phase = 'idle';
+    state.lastDrumId = null;
+  } else {
+    // Check if hand is in trigger band (bottom portion of zone)
+    const { cy, hh } = drumBoundsXY(zone, W, H);
+    const triggerTop = cy + hh * (1 - cfg.triggerBand); // top of trigger band
+    const inTrigger  = sy >= triggerTop;
+
+    if (inTrigger && state.phase === 'idle') {
+      // First frame in trigger band → FIRE
+      state.phase = 'fired';
+      state.lastDrumId = zone.id;
+      const vel2 = Math.max(Math.abs(vel), 0.3); // ensure minimum velocity
+      const normVel = Math.min(vel2 / 1.0, 1.0);
+      zone.sound(0.4 + normVel * 0.6);
+      flashDrum(zone.id);
+      spawnRipple(sx, sy, zone.color);
+      onHit(zone, normVel);
+    } else if (!inTrigger) {
+      // In zone but above trigger band — waiting
+      if (state.lastDrumId !== zone.id) state.phase = 'idle';
+    }
+    // if phase === 'fired' and still in zone → do nothing (prevent double hit)
   }
 
-  state.lastVel = vel;
-  return { sx, sy, vel, drum, state };
+  return { sx, sy, vel, zone, state };
 }
 
 // ═══════════════════════════════════════════════════
@@ -636,15 +649,23 @@ function drawKit(ctx, W, H) {
     }
 
     if (cfg.showLines) {
-      // Activation line — horizontal line across full zone width
+      // Trigger band — shaded bottom portion of zone
+      const triggerTop = cy + hh * (1 - cfg.triggerBand);
+      // Draw trigger band fill
       ctx.beginPath();
-      ctx.moveTo(cx - hw, lineY);
-      ctx.lineTo(cx + hw, lineY);
-      const la = 0.35 + fa * 0.65;
+      ctx.ellipse(cx, cy + hh * (1 - cfg.triggerBand/2),
+        hw * 0.9, hh * cfg.triggerBand / 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = d.color + Math.round((0.08 + fa * 0.25) * 255).toString(16).padStart(2,'0');
+      ctx.fill();
+      // Trigger line
+      ctx.beginPath();
+      ctx.moveTo(cx - hw * 0.85, triggerTop);
+      ctx.lineTo(cx + hw * 0.85, triggerTop);
+      const la = 0.5 + fa * 0.5;
       ctx.strokeStyle = d.color + Math.round(la * 255).toString(16).padStart(2,'0');
       ctx.lineWidth = 1.5 + fa;
-      ctx.setLineDash([4, 3]);
-      if (fa > 0.1) { ctx.shadowColor = d.color; ctx.shadowBlur = 6; }
+      ctx.setLineDash([3, 3]);
+      if (fa > 0.05) { ctx.shadowColor = d.color; ctx.shadowBlur = 5; }
       ctx.stroke();
       ctx.setLineDash([]); ctx.shadowBlur = 0;
     }
@@ -658,9 +679,9 @@ function drawHands(ctx, results, W, H) {
   for (let hi = 0; hi < lms.length; hi++) {
     const lm  = lms[hi];
     const col = COLS[hi % 2];
-    const { sx, sy, vel, state } = processHand(hi, lm, W, H);
-    const isHit = state.phase === 'hit';
-    const isArmed = state.phase === 'armed';
+    const { sx, sy, vel, zone, state } = processHand(hi, lm, W, H);
+    const isHit   = state.phase === 'fired';
+    const isArmed = false; // position-based: no armed state
 
     // Skeleton (subtle)
     ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.globalAlpha = 0.4;
